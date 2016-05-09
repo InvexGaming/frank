@@ -201,6 +201,43 @@ public void OnClientCookiesCached(int client)
     g_bIsCoin[client] = true;
   }
 }
+
+public void OnClientPostAdminCheck(int client)
+{
+  if (IsClientInGame(client) && !IsFakeClient(client) && AreClientCookiesCached(client)) {
+    //Remove mm, coin, profile for non-vips
+    int isVIP = CheckCommandAccess(client, "", FlagToBit(vipFlag));
+    
+    if (!isVIP) {
+      char valueRank[16];
+      char valueProfileRank[16];
+      char valueCoin[16];
+      GetClientCookie(client, g_cookieRank, valueRank, sizeof(valueRank));
+      GetClientCookie(client, g_cookieProfileRank, valueProfileRank, sizeof(valueProfileRank));
+      GetClientCookie(client, g_cookieCoin, valueCoin, sizeof(valueCoin));
+      
+      //MM rank
+      if(strlen(valueRank) > 0) {
+        SetClientCookie(client, g_cookieRank, "");
+        g_iRank[client] = 0;
+      }
+      
+      //Profile
+      if(strlen(valueProfileRank) > 0) {
+        SetClientCookie(client, g_cookieProfileRank, "");
+        g_iProfileRank[client] = 0;
+        g_bIsProfileRank[client] = false;
+      }
+      
+      //Coin
+      if(strlen(valueCoin) > 0) {
+        SetClientCookie(client, g_cookieCoin, "");
+        g_iCoin[client] = 0;
+        g_bIsCoin[client] = false;
+      }
+    }
+  }
+}
   
 public Action Event_Disconnect(Handle event, const char[] name, bool dontBroadcast)
 {
@@ -464,7 +501,7 @@ public Action Command_SetElo(int client, int args)
 {
   if (args < 2)
   {
-    ReplyToCommand(client, "[SM] Usage: sm_elorank <#userid|name> <0-18>");
+    ReplyToCommand(client, "[SM] Usage: sm_setmm <#userid|name> <0-18>");
     return Plugin_Handled;
   }
   
@@ -508,7 +545,7 @@ public Action Command_SetProfile(int client, int args)
 {
   if (args < 2)
   {
-    ReplyToCommand(client, "[SM] Usage: sm_prorank <#userid|name> <0-40>");
+    ReplyToCommand(client, "[SM] Usage: sm_setprofile <#userid|name> <0-40>");
     return Plugin_Handled;
   }
   
@@ -553,7 +590,7 @@ public Action Command_SetCoin(int client, int args)
 {
   if (args < 2)
   {
-    ReplyToCommand(client, "[SM] Usage: sm_emblem <#userid|name> <coin>");
+    ReplyToCommand(client, "[SM] Usage: sm_setcoin <#userid|name> <coin>");
     return Plugin_Handled;
   }
   
