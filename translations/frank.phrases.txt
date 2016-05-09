@@ -1,0 +1,27 @@
+"Phrases"
+{
+	"Rank_Menu"
+	{
+		"en"		"Choose your rank:"
+	}
+	"Rank_Set"
+	{
+		"en"		"[SM] Your rank is now "
+	}
+	"ProfileRank_Menu"
+	{
+		"en"		"Choose your profile rank:"
+	}
+	"ProfileRank_Set"
+	{
+		"en"		"[SM] Your profile rank is now "
+	}
+	"Coin_Menu"
+	{
+		"en"		"Choose your coin:"
+	}
+	"Coin_Set"
+	{
+		"en"		"[SM] Your coin is now "
+	}
+}
