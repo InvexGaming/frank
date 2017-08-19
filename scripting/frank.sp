@@ -7,7 +7,8 @@
 #pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.2"
+#define PLUGIN_VERSION "1.3"
+#define MAX_NUM_ELEMENTS 256
 
 AdminFlag vipFlag = Admin_Custom3;
 
@@ -51,7 +52,7 @@ public void OnPluginStart()
   LoadTranslations("common.phrases");
   LoadTranslations("frank.phrases");
   
-  g_hCvarVersion = CreateConVar("sm_frank_version", PLUGIN_VERSION, "Fake rank version", FCVAR_PLUGIN|FCVAR_SPONLY|FCVAR_REPLICATED|FCVAR_NOTIFY|FCVAR_DONTRECORD);
+  g_hCvarVersion = CreateConVar("sm_frank_version", PLUGIN_VERSION, "Fake rank version", FCVAR_SPONLY|FCVAR_REPLICATED|FCVAR_NOTIFY|FCVAR_DONTRECORD);
   g_hCvarVersion.SetString(PLUGIN_VERSION);
   g_ShowCoins = CreateConVar("sm_frank_coins", "1", "Show legit coins on players, if enabled", _, true, 0.0, true, 1.0);
   g_ShowProfileRanks = CreateConVar("sm_frank_profileranks", "1", "Show legit profile ranks on players, if enabled", _, true, 0.0, true, 1.0);
@@ -108,9 +109,9 @@ public void OnMapStart()
     return;
   }
   
-  g_arrayRanks = CreateArray(ByteCountToCells(128));
-  g_arrayProfileRanks = CreateArray(ByteCountToCells(128));
-  g_arrayCoins = CreateArray(ByteCountToCells(128));
+  g_arrayRanks = CreateArray(ByteCountToCells(MAX_NUM_ELEMENTS));
+  g_arrayProfileRanks = CreateArray(ByteCountToCells(MAX_NUM_ELEMENTS));
+  g_arrayCoins = CreateArray(ByteCountToCells(MAX_NUM_ELEMENTS));
 
   g_arrayRanksNum = CreateArray();
   g_arrayProfileRanksNum = CreateArray();
@@ -121,7 +122,7 @@ public void OnMapStart()
   
 void BrowseKeyValues(Handle k)
 {
-  char key[128];
+  char key[MAX_NUM_ELEMENTS];
   char value[128];
   do
   {
@@ -355,8 +356,8 @@ public Action Command_EloMenu(int client, int args)
     Menu elo = CreateMenu(EloHandler);
     elo.SetTitle("%T", "Rank_Menu", client);
     int size = GetArraySize(g_arrayRanks);
-    int key[128];
-    char ckey[128];
+    int key[MAX_NUM_ELEMENTS];
+    char ckey[MAX_NUM_ELEMENTS];
     char value[128];
     for (int i = 0; i < size; i++)
     {
@@ -406,8 +407,8 @@ public Action Command_ProfileMenu(int client, int args)
     Menu profile = CreateMenu(ProfileHandler);
     profile.SetTitle("%T", "ProfileRank_Menu", client);
     int size = GetArraySize(g_arrayProfileRanks);
-    int key[128];
-    char ckey[128];
+    int key[MAX_NUM_ELEMENTS];
+    char ckey[MAX_NUM_ELEMENTS];
     char value[128];
     for (int i = 0; i < size; i++)
     {
@@ -458,8 +459,8 @@ public Action Command_CoinMenu(int client, int args)
     Menu coin = CreateMenu(CoinHandler);
     coin.SetTitle("%T", "Coin_Menu", client);
     int size = GetArraySize(g_arrayCoins);
-    int key[128];
-    char ckey[128];
+    int key[MAX_NUM_ELEMENTS];
+    char ckey[MAX_NUM_ELEMENTS];
     char value[128];
     for (int i = 0; i < size; i++)
     {
