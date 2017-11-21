@@ -1,542 +1,530 @@
 #include <sourcemod>
-#include <cstrike>
-#include <sdkhooks>
 #include <sdktools>
+#include <sdkhooks>
+#include <cstrike>
 #include <clientprefs>
+#include <colors_csgo_v2>
 
 #pragma semicolon 1
 #pragma newdecls required
 
-#define PLUGIN_VERSION "1.3"
-#define MAX_NUM_ELEMENTS 256
+// Plugin Informaiton
+#define VERSION "2.00"
 
-AdminFlag vipFlag = Admin_Custom3;
-
-bool g_bIsCoin[MAXPLAYERS+1];
-bool g_bIsProfileRank[MAXPLAYERS+1];
-
-int g_iRank[MAXPLAYERS+1] = {0,...};
-int g_iProfileRank[MAXPLAYERS+1] = {0,...};
-int g_iCoin[MAXPLAYERS+1] = {0,...};
-
-char g_section[128];
-int g_array;
-
-Handle g_cookieRank = INVALID_HANDLE;
-Handle g_cookieProfileRank = INVALID_HANDLE;
-Handle g_cookieCoin = INVALID_HANDLE;
-
-Handle g_arrayRanks = INVALID_HANDLE;
-Handle g_arrayProfileRanks = INVALID_HANDLE;
-Handle g_arrayCoins = INVALID_HANDLE;
-Handle g_arrayRanksNum = INVALID_HANDLE;
-Handle g_arrayProfileRanksNum = INVALID_HANDLE;
-Handle g_arrayCoinsNum = INVALID_HANDLE;
-
-Handle kv = INVALID_HANDLE;
-
-ConVar g_hCvarVersion;
-ConVar g_ShowCoins;
-ConVar g_ShowProfileRanks;
-
-public Plugin myinfo = {
-  name = "[CS:GO] Fake Competitive Ranks/Coins",
-  author = "Laam4",
-  description = "Show competitive ranks and coins on scoreboard",
-  version = PLUGIN_VERSION,
-  url = "https://forums.alliedmods.net/showthread.php?p=2265799"
+public Plugin myinfo =
+{
+  name = "Frank - Fake Competitive Ranks/Profiles/Coins",
+  author = "Invex | Byte",
+  description = "Show competitive ranks, profile icons and coins on scoreboard",
+  version = VERSION,
+  url = "http://www.invexgaming.com.au"
 };
+
+//Convars
+ConVar g_Cvar_VipFlag = null;
+
+//Definitions
+#define CHAT_TAG_PREFIX "[{lightred}FRANK{default}] "
+#define MMSTYLE_DEFAULT 0
+#define MMSTYLE_WINGMANRANK 7
+#define MMSTYLE_WINGMANLEVEL 8
+
+//Globals
+int g_CompetitiveRanking[MAXPLAYERS+1] = {0, ...}; //m_iCompetitiveRanking
+int g_CompetitiveRankType[MAXPLAYERS+1] = {0, ...}; //m_iCompetitiveRankType
+int g_ProfileRank[MAXPLAYERS+1] = {0, ...}; //m_nPersonaDataPublicLevel
+int g_ActiveCoinRank[MAXPLAYERS+1] = {0, ...}; //m_nActiveCoinRank
+
+bool g_WaitingForSayInput[MAXPLAYERS+1] = {false, ...};
+
+//Netprop offsets
+int g_CompetitiveRankingOffset = -1;
+int g_CompetitiveRankTypeOffset = -1;
+int g_ProfileRankOffset = -1;
+int g_ActiveCoinRankOffset = -1;
+
+//Cookies
+Handle g_CompetitiveRankingCookie = null;
+Handle g_CompetitiveRankTypeCookie = null;
+Handle g_ProfileRankCookie = null;
+Handle g_ActiveCoinRankCookie = null;
+
+//ArrayList
+ArrayList g_ArrayRanks = null;
+ArrayList g_ArrayRankTypes = null;
+ArrayList g_ArrayProfileRanks = null;
+ArrayList g_ArrayCoins = null;
+ArrayList g_ArrayRanksName = null;
+ArrayList g_ArrayRankTypesName = null;
+ArrayList g_ArrayProfileRanksName = null;
+ArrayList g_ArrayCoinsName = null;
+
+//Lateload
+bool g_LateLoaded = false;
+
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
+{
+  g_LateLoaded = late;
+  return APLRes_Success;
+}
 
 public void OnPluginStart()
 {
+  //Translations
   LoadTranslations("common.phrases");
   LoadTranslations("frank.phrases");
   
-  g_hCvarVersion = CreateConVar("sm_frank_version", PLUGIN_VERSION, "Fake rank version", FCVAR_SPONLY|FCVAR_REPLICATED|FCVAR_NOTIFY|FCVAR_DONTRECORD);
-  g_hCvarVersion.SetString(PLUGIN_VERSION);
-  g_ShowCoins = CreateConVar("sm_frank_coins", "1", "Show legit coins on players, if enabled", _, true, 0.0, true, 1.0);
-  g_ShowProfileRanks = CreateConVar("sm_frank_profileranks", "1", "Show legit profile ranks on players, if enabled", _, true, 0.0, true, 1.0);
+  //Setup cookies
+  g_CompetitiveRankingCookie = RegClientCookie("Frank_CompetitiveRanking", "", CookieAccess_Private);
+  g_CompetitiveRankTypeCookie = RegClientCookie("Frank_CompetitiveRankType", "", CookieAccess_Private);
+  g_ProfileRankCookie = RegClientCookie("Frank_ProfileRank", "", CookieAccess_Private);
+  g_ActiveCoinRankCookie = RegClientCookie("Frank_ActiveCoinRank", "", CookieAccess_Private);
   
-  RegAdminCmd("sm_setmm", Command_SetElo,  ADMFLAG_GENERIC, "sm_elorank <#userid|name> <0-18>");
-  RegAdminCmd("sm_setcoin", Command_SetCoin, ADMFLAG_GENERIC, "sm_emblem <#userid|name> <874-6011>");
-  RegAdminCmd("sm_setprofile", Command_SetProfile,  ADMFLAG_GENERIC, "sm_prorank <#userid|name> <0-40>");
-  
-  RegConsoleCmd("sm_coin", Command_CoinMenu);
-  RegConsoleCmd("sm_mm", Command_EloMenu);
-  RegConsoleCmd("sm_profile", Command_ProfileMenu );
+  //ConVars
+  CreateConVar("sm_frank_version", VERSION, "Frank version", FCVAR_SPONLY|FCVAR_REPLICATED|FCVAR_NOTIFY|FCVAR_DONTRECORD);
+  g_Cvar_VipFlag = CreateConVar("sm_frank_vipflag", "q", "Flag to identify VIP players");
   
   AutoExecConfig(true, "frank");
   
-  HookEvent("announce_phase_end", Event_AnnouncePhaseEnd);
-  HookEvent("player_disconnect", Event_Disconnect, EventHookMode_Pre);
-  //HookEvent("player_team", Event_PlayerTeam, EventHookMode_Pre); 
-  g_cookieRank = RegClientCookie("g_iRank", "", CookieAccess_Private);
-  g_cookieProfileRank = RegClientCookie("g_iProfileRank", "", CookieAccess_Private);
-  g_cookieCoin = RegClientCookie("g_iCoin", "", CookieAccess_Private);
+  //Commands
+  RegConsoleCmd("sm_mm", Command_Mm);
+  RegConsoleCmd("sm_mmstyle", Command_Mmstyle);
+  RegConsoleCmd("sm_profile", Command_Profile);
+  RegConsoleCmd("sm_coin", Command_Coin);
   
-  for (int i = 1; i <= MaxClients; i++)
-  {
-    if (IsClientInGame(i) && !IsFakeClient(i) && AreClientCookiesCached(i))
-    {
-      OnClientCookiesCached(i);
+  RegAdminCmd("sm_setmm", Command_SetMm, ADMFLAG_GENERIC, "Set clients MM rank");
+  RegAdminCmd("sm_setmmstyle", Command_SetMmstyle, ADMFLAG_GENERIC, "Set clients MM style");
+  RegAdminCmd("sm_setprofile", Command_SetProfile, ADMFLAG_GENERIC, "Set clients Profile");
+  RegAdminCmd("sm_setcoin", Command_SetCoin, ADMFLAG_GENERIC, "Set clients Coin");
+  
+  //Late load
+  if (g_LateLoaded) {
+    for (int i = 1; i <= MaxClients; ++i) {
+      if (IsClientInGame(i)) {
+        OnClientPutInServer(i);
+        
+        if (!IsFakeClient(i) && AreClientCookiesCached(i))
+          OnClientCookiesCached(i);
+      }  
     }
+    
+    g_LateLoaded = false;
   }
+  
+  //Initilise arrays
+  g_ArrayRanks = new ArrayList(1);
+  g_ArrayRankTypes = new ArrayList(1);
+  g_ArrayProfileRanks = new ArrayList(1);
+  g_ArrayCoins = new ArrayList(1);
+  g_ArrayRanksName = new ArrayList(ByteCountToCells(255));
+  g_ArrayRankTypesName = new ArrayList(ByteCountToCells(255));
+  g_ArrayProfileRanksName = new ArrayList(ByteCountToCells(255));
+  g_ArrayCoinsName = new ArrayList(ByteCountToCells(255));
+  
+  //Hooks
+  HookEvent("announce_phase_end", Event_AnnouncePhaseEnd);
 }
 
 public void OnMapStart()
 {
-  int iIndex = FindEntityByClassname(MaxClients+1, "cs_player_manager");
-  if (iIndex == -1)
-  {
-    SetFailState("Unable to find cs_player_manager entity");
-  }
-  SDKHook(iIndex, SDKHook_ThinkPost, Hook_OnThinkPost);
+  int entity = FindEntityByClassname(MaxClients+1, "cs_player_manager");
+  if (entity == -1)
+    SetFailState("Unable to find cs_player_manager entity.");
   
-  char configFile[PLATFORM_MAX_PATH];
-  BuildPath(Path_SM, configFile, sizeof(configFile), "configs/frank.cfg");
-
-  if (!FileExists(configFile))
-  {
-    LogError("The frank config (%s) file does not exist", configFile);
-    return;
-  }
-
-  kv = CreateKeyValues("Frank");
-  FileToKeyValues(kv, configFile);
-  if (!KvGotoFirstSubKey(kv))
-  {
-    LogError("The frank config (%s) file was empty", configFile);
-    return;
-  }
+  //Get offsets
+  g_CompetitiveRankingOffset = FindSendPropInfo("CCSPlayerResource", "m_iCompetitiveRanking");
+  g_CompetitiveRankTypeOffset = FindSendPropInfo("CCSPlayerResource", "m_iCompetitiveRankType");
+  g_ProfileRankOffset = FindSendPropInfo("CCSPlayerResource", "m_nPersonaDataPublicLevel");
+  g_ActiveCoinRankOffset = FindSendPropInfo("CCSPlayerResource", "m_nActiveCoinRank");
   
-  g_arrayRanks = CreateArray(ByteCountToCells(MAX_NUM_ELEMENTS));
-  g_arrayProfileRanks = CreateArray(ByteCountToCells(MAX_NUM_ELEMENTS));
-  g_arrayCoins = CreateArray(ByteCountToCells(MAX_NUM_ELEMENTS));
-
-  g_arrayRanksNum = CreateArray();
-  g_arrayProfileRanksNum = CreateArray();
-  g_arrayCoinsNum = CreateArray();
-
-  BrowseKeyValues(kv);
+  if (g_CompetitiveRankingOffset == -1 || g_CompetitiveRankTypeOffset == -1 || g_ProfileRankOffset == -1 || g_ActiveCoinRankOffset == -1)
+    SetFailState("Failed to get required CCSPlayerResource offsets.");
+  
+  //Read config
+  ReadConfigFile();
+  
+  //Hook ThinkPost
+  SDKHook(entity, SDKHook_ThinkPost, Hook_OnThinkPost);
 }
-  
-void BrowseKeyValues(Handle k)
+
+//Monitor chat to capture commands
+public Action OnClientSayCommand(int client, const char[] command, const char[] sArgs)
 {
-  char key[MAX_NUM_ELEMENTS];
-  char value[128];
-  do
-  {
-    // You can read the section/key name by using KvGetSectionName here.
-    KvGetSectionName(k, g_section, sizeof(g_section));
-    if (StrEqual(g_section, "Ranks"))
-    {
-      g_array = 1;
-      //LogToGame("Array 1");
+  if (g_WaitingForSayInput[client]) {
+    if (IsStringNumeric(sArgs)) {
+      SetClientMm(client, StringToInt(sArgs));
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "Wingman Level", sArgs);
     }
-    if (StrEqual(g_section, "Profile"))
-    {
-      g_array = 2;
-      //LogToGame("Array 2");
+    else {
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Non Numeric Input", sArgs);
     }
-    if (StrEqual(g_section, "Coins"))
-      {
-      g_array = 3;
-      //LogToGame("Array 3");
-    }
-    //LogToGame("section: %s", g_section);
-    if (KvGotoFirstSubKey(k, false))
-    {
-      // Current key is a section. Browse it recursively.
-      //LogToGame("Recursive");
-      BrowseKeyValues(k);
-      KvGoBack(k);
-    }
-    else
-    {
-      // Current key is a regular key, or an empty section.
-      if (KvGetDataType(k, NULL_STRING) != KvData_None)
-      {
-        KvGetSectionName(k, key, sizeof(key));
-        KvGetString(k, NULL_STRING, value, sizeof(value));
-        //LogToGame("%d: key: %s | value: %s", g_array, key, value);
-        switch(g_array)
-        {
-          case 1:
-          {
-            PushArrayString(g_arrayRanks, value);
-            PushArrayCell(g_arrayRanksNum, StringToInt(key));
-          }
-          case 2:
-          {
-            PushArrayString(g_arrayProfileRanks, value);
-            PushArrayCell(g_arrayProfileRanksNum, StringToInt(key));
-          }
-          case 3:
-          {
-            PushArrayString(g_arrayCoins, value);
-            PushArrayCell(g_arrayCoinsNum, StringToInt(key));
-          }
-        }
-      }
-    }
-  } while (KvGotoNextKey(k, false));
+    
+    //Reset
+    g_WaitingForSayInput[client] = false;
+    return Plugin_Handled;
+  }
+  
+  return Plugin_Continue;
+}
+
+public void OnClientPutInServer(int client)
+{
+  //Initilize variables if cookies uncached at this stage
+  if (!AreClientCookiesCached(client)) {
+    g_CompetitiveRanking[client] = 0;
+    g_CompetitiveRankType[client] = 0;
+    g_ProfileRank[client] = 0;
+    g_ActiveCoinRank[client] = 0;
+    g_WaitingForSayInput[client] = false;
+  }
 }
 
 public void OnClientCookiesCached(int client)
 {
-  char valueRank[16];
-  char valueProfileRank[16];
-  char valueCoin[16];
-  GetClientCookie(client, g_cookieRank, valueRank, sizeof(valueRank));
-  if(strlen(valueRank) > 0) g_iRank[client] = StringToInt(valueRank);
-  GetClientCookie(client, g_cookieProfileRank, valueProfileRank, sizeof(valueProfileRank));
-  if(strlen(valueProfileRank) > 0)
-  {
-    g_iProfileRank[client] = StringToInt(valueProfileRank);
-    g_bIsProfileRank[client] = true;
+  //For non-VIP's do not load in the stored cookie preferences
+  //If the client gets VIP status at a later time, their preferences will still be there
+  if (!IsClientVip(client)) {
+    //Reset global variables
+    g_CompetitiveRanking[client] = 0;
+    g_CompetitiveRankType[client] = 0;
+    g_ProfileRank[client] = 0;
+    g_ActiveCoinRank[client] = 0;
+    g_WaitingForSayInput[client] = false;
+    
+    return;
   }
-  GetClientCookie(client, g_cookieCoin, valueCoin, sizeof(valueCoin));
-  if(strlen(valueCoin) > 0)
-  {
-    g_iCoin[client] = StringToInt(valueCoin);
-    g_bIsCoin[client] = true;
-  }
+  
+  //Load in cookie values for VIP players
+  char buffer[16];
+  GetClientCookie(client, g_CompetitiveRankingCookie, buffer, sizeof(buffer));
+  g_CompetitiveRanking[client] = StringToInt(buffer);
+  
+  GetClientCookie(client, g_CompetitiveRankTypeCookie, buffer, sizeof(buffer));
+  g_CompetitiveRankType[client] = StringToInt(buffer);
+  
+  GetClientCookie(client, g_ProfileRankCookie, buffer, sizeof(buffer));
+  g_ProfileRank[client] = StringToInt(buffer);
+  
+  GetClientCookie(client, g_ActiveCoinRankCookie, buffer, sizeof(buffer));
+  g_ActiveCoinRank[client] = StringToInt(buffer);
 }
 
+//Call OnClientCookiesCached here when player is fully in game and authorized
 public void OnClientPostAdminCheck(int client)
 {
-  if (IsClientInGame(client) && !IsFakeClient(client) && AreClientCookiesCached(client)) {
-    //Remove mm, coin, profile for non-vips
-    int isVIP = CheckCommandAccess(client, "", FlagToBit(vipFlag));
-    
-    if (!isVIP) {
-      char valueRank[16];
-      char valueProfileRank[16];
-      char valueCoin[16];
-      GetClientCookie(client, g_cookieRank, valueRank, sizeof(valueRank));
-      GetClientCookie(client, g_cookieProfileRank, valueProfileRank, sizeof(valueProfileRank));
-      GetClientCookie(client, g_cookieCoin, valueCoin, sizeof(valueCoin));
-      
-      //MM rank
-      if(strlen(valueRank) > 0) {
-        SetClientCookie(client, g_cookieRank, "");
-        g_iRank[client] = 0;
-      }
-      
-      //Profile
-      if(strlen(valueProfileRank) > 0) {
-        SetClientCookie(client, g_cookieProfileRank, "");
-        g_iProfileRank[client] = 0;
-        g_bIsProfileRank[client] = false;
-      }
-      
-      //Coin
-      if(strlen(valueCoin) > 0) {
-        SetClientCookie(client, g_cookieCoin, "");
-        g_iCoin[client] = 0;
-        g_bIsCoin[client] = false;
-      }
-    }
-  }
+  if (IsClientInGame(client) && !IsFakeClient(client) && AreClientCookiesCached(client))
+    OnClientCookiesCached(client);
 }
-  
-public Action Event_Disconnect(Handle event, const char[] name, bool dontBroadcast)
-{
-  int client = GetClientOfUserId(GetEventInt(event, "userid"));
-  if(client)
-  {
-    g_iCoin[client] = 0;
-    g_iRank[client] = 0;
-    g_iProfileRank[client] = 0;
-    g_bIsCoin[client] = false;
-    g_bIsProfileRank[client] = false;
-  }
-}
-/*
-public Action Event_PlayerTeam(Handle event, const char[] name, bool dontBroadcast) 
-{ 
-  int client = GetClientOfUserId(GetEventInt(event, "userid"));
-  if(client)
-  {  
-    g_iRank[client] = 0;
-  }
-}
-*/
+
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon)
 {
   if (buttons & IN_SCORE && !(GetEntProp(client, Prop_Data, "m_nOldButtons") & IN_SCORE)) {
     Handle hBuffer = StartMessageOne("ServerRankRevealAll", client);
     if (hBuffer == INVALID_HANDLE)
-    {
-      PrintToChat(client, "INVALID_HANDLE");
-    }
+      LogError("Frank - ServerRankRevealAll is null in OnPlayerRunCmd");
     else
-    {
       EndMessage();
-    }
   }
   return Plugin_Continue;
 }
 
-public Action Event_AnnouncePhaseEnd(Handle event, const char[] name, bool dontBroadcast)
+public Action Event_AnnouncePhaseEnd(Event event, const char[] name, bool dontBroadcast)
 {
   Handle hBuffer = StartMessageAll("ServerRankRevealAll");
-  if (hBuffer == INVALID_HANDLE)
-  {
-    PrintToServer("ServerRankRevealAll = INVALID_HANDLE");
-  }
+  if (hBuffer == null)
+    LogError("Frank - ServerRankRevealAll is null in Event_AnnouncePhaseEnd");
   else
-  {
     EndMessage();
-  }
+  
   return Plugin_Continue;
 }
 
-public void Hook_OnThinkPost(int iEnt)
+public void Hook_OnThinkPost(int entity)
 {
-  int Offset[3] = {-1, -1, -1};
-  if (Offset[0] == -1)
-  {
-    Offset[0] = FindSendPropInfo("CCSPlayerResource", "m_iCompetitiveRanking");
-  }
-  if (Offset[1] == -1)
-  {
-    Offset[1] = FindSendPropInfo("CCSPlayerResource", "m_nPersonaDataPublicLevel");
-  }
-  if (Offset[2] == -1)
-  {
-    Offset[2] = FindSendPropInfo("CCSPlayerResource", "m_nActiveCoinRank");
-  }
+  //Set entity values
+  SetEntDataArray(entity, g_CompetitiveRankingOffset, g_CompetitiveRanking, MAXPLAYERS+1, 4, true);
+  SetEntDataArray(entity, g_CompetitiveRankTypeOffset, g_CompetitiveRankType, MAXPLAYERS+1, 1, true);
+  SetEntDataArray(entity, g_ProfileRankOffset, g_ProfileRank, MAXPLAYERS+1, 4, true);
+  SetEntDataArray(entity, g_ActiveCoinRankOffset, g_ActiveCoinRank, MAXPLAYERS+1, 4, true);
+}
 
-  SetEntDataArray(iEnt, Offset[0], g_iRank, MAXPLAYERS+1, _, true);
+/*
+ * Commands
+ */
+
+public Action Command_Mm(int client, int args)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
   
-  if (GetConVarBool(g_ShowProfileRanks))
-  {
-    int tempPrank[MAXPLAYERS+1];
-    GetEntDataArray(iEnt, Offset[1], tempPrank, MAXPLAYERS+1);
-    for (int i = 1; i <= MaxClients; i++)
-    {
-      if (g_bIsProfileRank[i])
-      {
-        tempPrank[i] = g_iProfileRank[i];
+  if (!IsClientVip(client)) {
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Client Not VIP");
+    return Plugin_Handled;
+  }
+  
+  //Check arguments
+  bool argProvided = false;
+  char arg[255];
+  
+  if (args >= 1) {
+    argProvided = true;
+    GetCmdArgString(arg, sizeof(arg));
+  }
+  
+  //Process command
+  if (argProvided) {
+    if (g_CompetitiveRankType[client] == MMSTYLE_DEFAULT || g_CompetitiveRankType[client] == MMSTYLE_WINGMANRANK) {
+      int index = SearchArray(g_ArrayRanks, g_ArrayRanksName, arg);
+      if (index == -1)
+        CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", arg);
+      else {
+        SetClientMm(client, g_ArrayRanks.Get(index));
+        char buffer[255];
+        g_ArrayRanksName.GetString(index, buffer, sizeof(buffer));
+        CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "MM Rank", buffer);
       }
     }
-    SetEntDataArray(iEnt, Offset[1], tempPrank, MAXPLAYERS+1, _, true);
-  } else {
-    SetEntDataArray(iEnt, Offset[1], g_iProfileRank, MAXPLAYERS+1, _, true);
-  }
-  
-  if (GetConVarBool(g_ShowCoins))
-  {
-    int tempCoin[MAXPLAYERS+1];
-    GetEntDataArray(iEnt, Offset[2], tempCoin, MAXPLAYERS+1);
-    for (int i = 1; i <= MaxClients; i++)
-    {
-      if (g_bIsCoin[i])
-      {
-        tempCoin[i] = g_iCoin[i];
+    else if (g_CompetitiveRankType[client] == MMSTYLE_WINGMANLEVEL) {
+      if (IsStringNumeric(arg)) {
+        if (SetClientMm(client, StringToInt(arg)))
+          CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "Wingman Level", arg);
+        else
+          CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", arg);
       }
+      else
+        CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Non Numeric Input", arg);
     }
-    SetEntDataArray(iEnt, Offset[2], tempCoin, MAXPLAYERS+1, _, true);
-  } else {
-    SetEntDataArray(iEnt, Offset[2], g_iCoin, MAXPLAYERS+1, _, true);
   }
-}
-
-public Action Command_EloMenu(int client, int args)
-{
-  int isVIP = CheckCommandAccess(client, "", FlagToBit(vipFlag));
-  if (!isVIP) {
-    PrintToChat(client, "[SM] You must be a VIP user to use this command. Type \x04!vip\x01 to learn more.");
-    return Plugin_Handled;
+  else {
+    if (g_CompetitiveRankType[client] == MMSTYLE_DEFAULT || g_CompetitiveRankType[client] == MMSTYLE_WINGMANRANK) {
+      //Show menu as no argument was provided
+      Menu menu = new Menu(MmMenuHandler, MenuAction_Select|MenuAction_Cancel|MenuAction_End|MenuAction_DisplayItem|MenuAction_DrawItem);
+      menu.SetTitle("%t", "Menu Title MM");
+      
+      for (int i = 0; i < g_ArrayRanks.Length; ++i) {
+        char value[255], name[255];
+        IntToString(g_ArrayRanks.Get(i), value, sizeof(value));
+        g_ArrayRanksName.GetString(i, name, sizeof(name));
+        menu.AddItem(value, name);
+      }
+      
+      menu.Display(client, MENU_TIME_FOREVER);
+    }
+    else if (g_CompetitiveRankType[client] == MMSTYLE_WINGMANLEVEL) {
+      //Wait to get input as no argument was provided
+      g_WaitingForSayInput[client] = true;
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Enter Chat", "wingman level");
+    }
   }
   
-  if (IsClientInGame(client))
-  {
-    Menu elo = CreateMenu(EloHandler);
-    elo.SetTitle("%T", "Rank_Menu", client);
-    int size = GetArraySize(g_arrayRanks);
-    int key[MAX_NUM_ELEMENTS];
-    char ckey[MAX_NUM_ELEMENTS];
-    char value[128];
-    for (int i = 0; i < size; i++)
-    {
-      key[i] = GetArrayCell(g_arrayRanksNum, i);
-      IntToString(key[i], ckey, sizeof(ckey));
-      GetArrayString(g_arrayRanks, i, value, sizeof(value));
-      elo.AddItem(ckey, value);    
-    }      
-    elo.Display(client, 30);
-  }
   return Plugin_Handled;
 }
 
-public int EloHandler(Menu elo, MenuAction action, int client, int itemNum)
+public Action Command_SetMm(int client, int args)
 {
-  switch(action)
-  {
-  case MenuAction_Select:
-    {
-      char info[4];
-      char rankName[128];
-      int index;
-      elo.GetItem(itemNum, info, sizeof(info));
-      g_iRank[client] = StringToInt(info);
-      SetClientCookie(client, g_cookieRank, info);
-      index = FindValueInArray(g_arrayRanksNum, g_iRank[client]);
-      GetArrayString(g_arrayRanks, index, rankName, sizeof(rankName));
-      PrintToChat(client, "%T\x06%s", "Rank_Set", client, rankName);
-    }
-  case MenuAction_End:
-    {
-      delete elo;
-    }
-  }
-}
-
-public Action Command_ProfileMenu(int client, int args)
-{
-  int isVIP = CheckCommandAccess(client, "", FlagToBit(vipFlag));
-  if (!isVIP) {
-    PrintToChat(client, "[SM] You must be a VIP user to use this command. Type \x04!vip\x01 to learn more.");
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
+  
+  //Check arguments
+  if (args != 2) {
+    char cmd[64];
+    GetCmdArg(0, cmd, sizeof(cmd));
+    CPrintToChat(client, "%sUsage: %s <target> \"<query>\"", CHAT_TAG_PREFIX, cmd);
     return Plugin_Handled;
   }
   
-  if (IsClientInGame(client))
-  {
-    Menu profile = CreateMenu(ProfileHandler);
-    profile.SetTitle("%T", "ProfileRank_Menu", client);
-    int size = GetArraySize(g_arrayProfileRanks);
-    int key[MAX_NUM_ELEMENTS];
-    char ckey[MAX_NUM_ELEMENTS];
-    char value[128];
-    for (int i = 0; i < size; i++)
-    {
-      key[i] = GetArrayCell(g_arrayProfileRanksNum, i);
-      IntToString(key[i], ckey, sizeof(ckey));
-      GetArrayString(g_arrayProfileRanks, i, value, sizeof(value));
-      profile.AddItem(ckey, value);    
-    }      
-    profile.Display(client, 30);
-  }
-  return Plugin_Handled;
-}
+  char target[64], query[255];
+  GetCmdArg(1, target, sizeof(target));
+  GetCmdArg(2, query, sizeof(query));
 
-public int ProfileHandler(Menu profile, MenuAction action, int client, int itemNum)
-{
-  switch(action)
-  {
-  case MenuAction_Select:
-    {
-      char info[4];
-      char prankName[128];
-      int index;
-      profile.GetItem(itemNum, info, sizeof(info));
-      g_iProfileRank[client] = StringToInt(info);
-      SetClientCookie(client, g_cookieProfileRank, info);
-      g_bIsProfileRank[client] = true;
-      index = FindValueInArray(g_arrayProfileRanksNum, g_iProfileRank[client]);
-      GetArrayString(g_arrayProfileRanks, index, prankName, sizeof(prankName));
-      PrintToChat(client, "%T\x06%s", "ProfileRank_Set", client, prankName);
-    }
-  case MenuAction_End:
-    {
-      delete profile;
-    }
-  }
-}
-
-public Action Command_CoinMenu(int client, int args)
-{
-  int isVIP = CheckCommandAccess(client, "", FlagToBit(vipFlag));
-  if (!isVIP) {
-    PrintToChat(client, "[SM] You must be a VIP user to use this command. Type \x04!vip\x01 to learn more.");
-    return Plugin_Handled;
-  }
-
-  if (IsClientInGame(client))
-  {
-    Menu coin = CreateMenu(CoinHandler);
-    coin.SetTitle("%T", "Coin_Menu", client);
-    int size = GetArraySize(g_arrayCoins);
-    int key[MAX_NUM_ELEMENTS];
-    char ckey[MAX_NUM_ELEMENTS];
-    char value[128];
-    for (int i = 0; i < size; i++)
-    {
-      key[i] = GetArrayCell(g_arrayCoinsNum, i);
-      IntToString(key[i], ckey, sizeof(ckey));
-      GetArrayString(g_arrayCoins, i, value, sizeof(value));
-      coin.AddItem(ckey, value);    
-    }      
-    coin.Display(client, 30);
-  }
-  return Plugin_Handled;
-}
-
-public int CoinHandler(Menu coin, MenuAction action, int client, int itemNum)
-{
-  switch(action)
-  {
-  case MenuAction_Select:
-    {
-      char info[6];
-      char coinName[128];
-      int index;
-      coin.GetItem(itemNum, info, sizeof(info));
-      g_iCoin[client] = StringToInt(info);
-      SetClientCookie(client, g_cookieCoin, info);
-      g_bIsCoin[client] = true;
-      index = FindValueInArray(g_arrayCoinsNum, g_iCoin[client]);
-      GetArrayString(g_arrayCoins, index, coinName, sizeof(coinName));
-      PrintToChat(client, "%T\x06%s", "Coin_Set", client, coinName);
-    }
-  case MenuAction_End:
-    {
-      delete coin;
-    }
-  }
-}
-
-public Action Command_SetElo(int client, int args)
-{
-  if (args < 2)
-  {
-    ReplyToCommand(client, "[SM] Usage: sm_setmm <#userid|name> <0-18>");
-    return Plugin_Handled;
-  }
+  char targetName[MAX_TARGET_LENGTH+1];
+  int targetList[MAXPLAYERS+1];
+  int targetCount;
+  bool tnIsMl;
   
-  char szTarget[65];
-  GetCmdArg(1, szTarget, sizeof(szTarget));
-
-  char szTargetName[MAX_TARGET_LENGTH+1];
-  int iTargetList[MAXPLAYERS+1];
-  int iTargetCount;
-  bool bTnIsMl;
-
-  if ((iTargetCount = ProcessTargetString(
-          szTarget,
+  if ((targetCount = ProcessTargetString(
+          target,
           client,
-          iTargetList,
+          targetList,
           MAXPLAYERS,
           COMMAND_FILTER_CONNECTED,
-          szTargetName,
-          sizeof(szTargetName),
-          bTnIsMl)) <= 0)
+          targetName,
+          sizeof(targetName),
+          tnIsMl)) <= 0)
   {
-    ReplyToTargetError(client, iTargetCount);
+    ReplyToTargetError(client, targetCount);
     return Plugin_Handled;
   }
   
-  char szRank[6];
-  GetCmdArg(2, szRank, sizeof(szRank));
-
-  int iRanks = StringToInt(szRank);
+  for (int i = 0; i < targetCount; i++) {
+    if (g_CompetitiveRankType[targetList[i]] == MMSTYLE_DEFAULT || g_CompetitiveRankType[targetList[i]] == MMSTYLE_WINGMANRANK) {
+      int index = SearchArray(g_ArrayRanks, g_ArrayRanksName, query);
+      if (index == -1)
+        CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", query);
+      else {
+        SetClientMm(targetList[i], g_ArrayRanks.Get(index));
+        char buffer[255];
+        g_ArrayRanksName.GetString(index, buffer, sizeof(buffer));
+        CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected Admin", "MM Rank", buffer, targetList[i]);
+      }
+    }
+    else if (g_CompetitiveRankType[targetList[i]] == MMSTYLE_WINGMANLEVEL) {
+      if (IsStringNumeric(query)) {
+        if (SetClientMm(targetList[i], StringToInt(query)))
+          CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected Admin", "Wingman Level", query, targetList[i]);
+        else
+          CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", query);
+      }
+      else
+        CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Non Numeric Input", query);
+    }
+  }
   
-  for (int i = 0; i < iTargetCount; i++)
+  return Plugin_Handled;
+}
+
+public Action Command_Mmstyle(int client, int args)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
+  
+  if (!IsClientVip(client)) {
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Client Not VIP");
+    return Plugin_Handled;
+  }
+  
+  //Check arguments
+  bool argProvided = false;
+  char arg[255];
+  
+  if (args >= 1) {
+    argProvided = true;
+    GetCmdArgString(arg, sizeof(arg));
+  }
+  
+  if (argProvided) {
+    int index = SearchArray(g_ArrayRankTypes, g_ArrayRankTypesName, arg);
+    if (index == -1)
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", arg);
+    else {
+      SetClientMmStyle(client, g_ArrayRankTypes.Get(index));
+      char buffer[255];
+      g_ArrayRankTypesName.GetString(index, buffer, sizeof(buffer));
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "MM Style", buffer);
+    }
+  }
+  else {
+    //Show menu as no argument was provided
+    Menu menu = new Menu(MmStyleMenuHandler, MenuAction_Select|MenuAction_Cancel|MenuAction_End|MenuAction_DisplayItem|MenuAction_DrawItem);
+    menu.SetTitle("%t", "Menu Title MM Style");
+    
+    for (int i = 0; i < g_ArrayRankTypes.Length; ++i) {
+      char value[255], name[255];
+      IntToString(g_ArrayRankTypes.Get(i), value, sizeof(value));
+      g_ArrayRankTypesName.GetString(i, name, sizeof(name));
+      menu.AddItem(value, name);
+    }
+    
+    menu.Display(client, MENU_TIME_FOREVER);
+  }
+  
+  return Plugin_Handled;
+}
+
+public Action Command_SetMmstyle(int client, int args)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
+  
+  //Check arguments
+  if (args != 2) {
+    char cmd[64];
+    GetCmdArg(0, cmd, sizeof(cmd));
+    CPrintToChat(client, "%sUsage: %s <target> \"<query>\"", CHAT_TAG_PREFIX, cmd);
+    return Plugin_Handled;
+  }
+  
+  char target[64], query[255];
+  GetCmdArg(1, target, sizeof(target));
+  GetCmdArg(2, query, sizeof(query));
+
+  char targetName[MAX_TARGET_LENGTH+1];
+  int targetList[MAXPLAYERS+1];
+  int targetCount;
+  bool tnIsMl;
+  
+  if ((targetCount = ProcessTargetString(
+          target,
+          client,
+          targetList,
+          MAXPLAYERS,
+          COMMAND_FILTER_CONNECTED,
+          targetName,
+          sizeof(targetName),
+          tnIsMl)) <= 0)
   {
-    g_iRank[iTargetList[i]] = iRanks;
-    SetClientCookie(iTargetList[i], g_cookieRank, szRank);
+    ReplyToTargetError(client, targetCount);
+    return Plugin_Handled;
+  }
+  
+  for (int i = 0; i < targetCount; i++) {
+    int index = SearchArray(g_ArrayRankTypes, g_ArrayRankTypesName, query);
+    if (index == -1)
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", query);
+    else {
+      SetClientMmStyle(targetList[i], g_ArrayRankTypes.Get(index));
+      char buffer[255];
+      g_ArrayRankTypesName.GetString(index, buffer, sizeof(buffer));
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected Admin", "MM Style", buffer, targetList[i]);
+    }
+  }
+  
+  return Plugin_Handled;
+}
+
+public Action Command_Profile(int client, int args)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
+  
+  if (!IsClientVip(client)) {
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Client Not VIP");
+    return Plugin_Handled;
+  }
+  
+  //Check arguments
+  bool argProvided = false;
+  char arg[255];
+  
+  if (args >= 1) {
+    argProvided = true;
+    GetCmdArgString(arg, sizeof(arg));
+  }
+  
+  if (argProvided) {
+    int index = SearchArray(g_ArrayProfileRanks, g_ArrayProfileRanksName, arg);
+    if (index == -1)
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", arg);
+    else {
+      SetClientProfile(client, g_ArrayProfileRanks.Get(index));
+      char buffer[255];
+      g_ArrayProfileRanksName.GetString(index, buffer, sizeof(buffer));
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "Profile Rank", buffer);
+    }
+  }
+  else {
+    //Show menu as no argument was provided
+    Menu menu = new Menu(ProfileMenuHandler, MenuAction_Select|MenuAction_Cancel|MenuAction_End|MenuAction_DisplayItem|MenuAction_DrawItem);
+    menu.SetTitle("%t", "Menu Title Profile Rank");
+    
+    for (int i = 0; i < g_ArrayProfileRanks.Length; ++i) {
+      char value[255], name[255];
+      IntToString(g_ArrayProfileRanks.Get(i), value, sizeof(value));
+      g_ArrayProfileRanksName.GetString(i, name, sizeof(name));
+      menu.AddItem(value, name);
+    }
+    
+    menu.Display(client, MENU_TIME_FOREVER);
   }
   
   return Plugin_Handled;
@@ -544,44 +532,98 @@ public Action Command_SetElo(int client, int args)
 
 public Action Command_SetProfile(int client, int args)
 {
-  if (args < 2)
-  {
-    ReplyToCommand(client, "[SM] Usage: sm_setprofile <#userid|name> <0-40>");
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
+  
+  //Check arguments
+  if (args != 2) {
+    char cmd[64];
+    GetCmdArg(0, cmd, sizeof(cmd));
+    CPrintToChat(client, "%sUsage: %s <target> \"<query>\"", CHAT_TAG_PREFIX, cmd);
     return Plugin_Handled;
   }
   
-  char szTarget[65];
-  GetCmdArg(1, szTarget, sizeof(szTarget));
+  char target[64], query[255];
+  GetCmdArg(1, target, sizeof(target));
+  GetCmdArg(2, query, sizeof(query));
 
-  char szTargetName[MAX_TARGET_LENGTH+1];
-  int iTargetList[MAXPLAYERS+1];
-  int iTargetCount;
-  bool bTnIsMl;
-
-  if ((iTargetCount = ProcessTargetString(
-          szTarget,
+  char targetName[MAX_TARGET_LENGTH+1];
+  int targetList[MAXPLAYERS+1];
+  int targetCount;
+  bool tnIsMl;
+  
+  if ((targetCount = ProcessTargetString(
+          target,
           client,
-          iTargetList,
+          targetList,
           MAXPLAYERS,
           COMMAND_FILTER_CONNECTED,
-          szTargetName,
-          sizeof(szTargetName),
-          bTnIsMl)) <= 0)
+          targetName,
+          sizeof(targetName),
+          tnIsMl)) <= 0)
   {
-    ReplyToTargetError(client, iTargetCount);
+    ReplyToTargetError(client, targetCount);
     return Plugin_Handled;
   }
   
-  char szRank[6];
-  GetCmdArg(2, szRank, sizeof(szRank));
-
-  int iRanks = StringToInt(szRank);
+  for (int i = 0; i < targetCount; i++) {
+    int index = SearchArray(g_ArrayProfileRanks, g_ArrayProfileRanksName, query);
+    if (index == -1)
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", query);
+    else {
+      SetClientProfile(targetList[i], g_ArrayProfileRanks.Get(index));
+      char buffer[255];
+      g_ArrayProfileRanksName.GetString(index, buffer, sizeof(buffer));
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected Admin", "Profile Rank", buffer, targetList[i]);
+    }
+  }
   
-  for (int i = 0; i < iTargetCount; i++)
-  {
-    g_iProfileRank[iTargetList[i]] = iRanks;
-    g_bIsProfileRank[iTargetList[i]] = true;
-    SetClientCookie(iTargetList[i], g_cookieProfileRank, szRank);
+  return Plugin_Handled;
+}
+
+public Action Command_Coin(int client, int args)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
+  
+  if (!IsClientVip(client)) {
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Client Not VIP");
+    return Plugin_Handled;
+  }
+  
+  //Check arguments
+  bool argProvided = false;
+  char arg[255];
+  
+  if (args >= 1) {
+    argProvided = true;
+    GetCmdArgString(arg, sizeof(arg));
+  }
+  
+  if (argProvided) {
+    int index = SearchArray(g_ArrayCoins, g_ArrayCoinsName, arg);
+    if (index == -1)
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", arg);
+    else {
+      SetClientCoin(client, g_ArrayCoins.Get(index));
+      char buffer[255];
+      g_ArrayCoinsName.GetString(index, buffer, sizeof(buffer));
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "Coin", buffer);
+    }
+  }
+  else {
+    //Show menu as no argument was provided
+    Menu menu = new Menu(CoinMenuHandler, MenuAction_Select|MenuAction_Cancel|MenuAction_End|MenuAction_DisplayItem|MenuAction_DrawItem);
+    menu.SetTitle("%t", "Menu Title Coin");
+    
+    for (int i = 0; i < g_ArrayCoins.Length; ++i) {
+      char value[255], name[255];
+      IntToString(g_ArrayCoins.Get(i), value, sizeof(value));
+      g_ArrayCoinsName.GetString(i, name, sizeof(name));
+      menu.AddItem(value, name);
+    }
+    
+    menu.Display(client, MENU_TIME_FOREVER);
   }
   
   return Plugin_Handled;
@@ -589,44 +631,456 @@ public Action Command_SetProfile(int client, int args)
 
 public Action Command_SetCoin(int client, int args)
 {
-  if (args < 2)
-  {
-    ReplyToCommand(client, "[SM] Usage: sm_setcoin <#userid|name> <coin>");
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return Plugin_Handled;
+  
+  //Check arguments
+  if (args != 2) {
+    char cmd[64];
+    GetCmdArg(0, cmd, sizeof(cmd));
+    CPrintToChat(client, "%sUsage: %s <target> \"<query>\"", CHAT_TAG_PREFIX, cmd);
     return Plugin_Handled;
   }
   
-  char szTarget[65];
-  GetCmdArg(1, szTarget, sizeof(szTarget));
+  char target[64], query[255];
+  GetCmdArg(1, target, sizeof(target));
+  GetCmdArg(2, query, sizeof(query));
 
-  char szTargetName[MAX_TARGET_LENGTH+1];
-  int iTargetList[MAXPLAYERS+1];
-  int iTargetCount;
-  bool bTnIsMl;
-
-  if ((iTargetCount = ProcessTargetString(
-          szTarget,
+  char targetName[MAX_TARGET_LENGTH+1];
+  int targetList[MAXPLAYERS+1];
+  int targetCount;
+  bool tnIsMl;
+  
+  if ((targetCount = ProcessTargetString(
+          target,
           client,
-          iTargetList,
+          targetList,
           MAXPLAYERS,
           COMMAND_FILTER_CONNECTED,
-          szTargetName,
-          sizeof(szTargetName),
-          bTnIsMl)) <= 0)
+          targetName,
+          sizeof(targetName),
+          tnIsMl)) <= 0)
   {
-    ReplyToTargetError(client, iTargetCount);
+    ReplyToTargetError(client, targetCount);
     return Plugin_Handled;
   }
   
-  char szCoin[6];
-  GetCmdArg(2, szCoin, sizeof(szCoin));
-
-  int g_iCoins = StringToInt(szCoin);
-  
-  for (int i = 0; i < iTargetCount; i++)
-  {
-    g_iCoin[iTargetList[i]] = g_iCoins;
-    g_bIsCoin[iTargetList[i]] = true;
-    SetClientCookie(iTargetList[i], g_cookieCoin, szCoin);
+  for (int i = 0; i < targetCount; i++) {
+    int index = SearchArray(g_ArrayCoins, g_ArrayCoinsName, query);
+    if (index == -1)
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Search Found No Results", query);
+    else {
+      SetClientCoin(targetList[i], g_ArrayCoins.Get(index));
+      char buffer[255];
+      g_ArrayCoinsName.GetString(index, buffer, sizeof(buffer));
+      CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected Admin", "Coin", buffer, targetList[i]);
+    }
   }
+  
   return Plugin_Handled;
+}
+
+/*
+ * Menu Handlers
+ */
+ 
+public int MmMenuHandler(Menu menu, MenuAction action, int client, int itemNum)
+{
+  char info[255];
+  char display[255];
+  menu.GetItem(itemNum, info, sizeof(info), _, display, sizeof(display));
+  
+  if (action == MenuAction_DrawItem) {
+    if (g_CompetitiveRanking[client] == StringToInt(info))
+      return ITEMDRAW_DISABLED;
+  }
+  else if (action == MenuAction_DisplayItem) {
+    if (g_CompetitiveRanking[client] == StringToInt(info)) {
+      //Change selected text
+      char equipedText[255];
+      Format(equipedText, sizeof(equipedText), "%s [*]", display);
+      return RedrawMenuItem(equipedText);
+    }
+  }
+  else if (action == MenuAction_Select) {
+    SetClientMm(client, StringToInt(info));
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "MM Rank", display);
+  }
+  else if (action == MenuAction_End) {
+    delete menu;
+  }
+  
+  return 0;
+}
+
+public int MmStyleMenuHandler(Menu menu, MenuAction action, int client, int itemNum)
+{
+  char info[255];
+  char display[255];
+  menu.GetItem(itemNum, info, sizeof(info), _, display, sizeof(display));
+  
+  if (action == MenuAction_DrawItem) {
+    if (g_CompetitiveRankType[client] == StringToInt(info))
+      return ITEMDRAW_DISABLED;
+  }
+  else if (action == MenuAction_DisplayItem) {
+    if (g_CompetitiveRankType[client] == StringToInt(info)) {
+      //Change selected text
+      char equipedText[255];
+      Format(equipedText, sizeof(equipedText), "%s [*]", display);
+      return RedrawMenuItem(equipedText);
+    }
+  }
+  else if (action == MenuAction_Select) {
+    SetClientMmStyle(client, StringToInt(info));
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "MM Style", display);
+  }
+  else if (action == MenuAction_End) {
+    delete menu;
+  }
+  
+  return 0;
+}
+
+public int ProfileMenuHandler(Menu menu, MenuAction action, int client, int itemNum)
+{
+  char info[255];
+  char display[255];
+  menu.GetItem(itemNum, info, sizeof(info), _, display, sizeof(display));
+  
+  if (action == MenuAction_DrawItem) {
+    if (g_ProfileRank[client] == StringToInt(info))
+      return ITEMDRAW_DISABLED;
+  }
+  else if (action == MenuAction_DisplayItem) {
+    if (g_ProfileRank[client] == StringToInt(info)) {
+      //Change selected text
+      char equipedText[255];
+      Format(equipedText, sizeof(equipedText), "%s [*]", display);
+      return RedrawMenuItem(equipedText);
+    }
+  }
+  else if (action == MenuAction_Select) {
+    SetClientProfile(client, StringToInt(info));
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "Profile Rank", display);
+  }
+  else if (action == MenuAction_End) {
+    delete menu;
+  }
+  
+  return 0;
+}
+
+public int CoinMenuHandler(Menu menu, MenuAction action, int client, int itemNum)
+{
+  char info[255];
+  char display[255];
+  menu.GetItem(itemNum, info, sizeof(info), _, display, sizeof(display));
+  
+  if (action == MenuAction_DrawItem) {
+    if (g_ActiveCoinRank[client] == StringToInt(info))
+      return ITEMDRAW_DISABLED;
+  }
+  else if (action == MenuAction_DisplayItem) {
+    if (g_ActiveCoinRank[client] == StringToInt(info)) {
+      //Change selected text
+      char equipedText[255];
+      Format(equipedText, sizeof(equipedText), "%s [*]", display);
+      return RedrawMenuItem(equipedText);
+    }
+  }
+  else if (action == MenuAction_Select) {
+    SetClientCoin(client, StringToInt(info));
+    CPrintToChat(client, "%s%t", CHAT_TAG_PREFIX, "Generic Selected", "Coin", display);
+  }
+  else if (action == MenuAction_End) {
+    delete menu;
+  }
+  
+  return 0;
+}
+
+/*
+ * Helper functions
+ */
+
+void ReadConfigFile()
+{
+  char path[PLATFORM_MAX_PATH];
+  Format(path, sizeof(path), "configs/frank.cfg");
+  BuildPath(Path_SM, path, sizeof(path), path);
+  
+  if (!FileExists(path)) {
+    SetFailState("Config file frank.cfg was not found");
+  }
+
+  //Reset current arrays
+  g_ArrayRanks.Clear();
+  g_ArrayRankTypes.Clear();
+  g_ArrayProfileRanks.Clear();
+  g_ArrayCoins.Clear();
+  g_ArrayRanksName.Clear();
+  g_ArrayRankTypesName.Clear();
+  g_ArrayProfileRanksName.Clear();
+  g_ArrayCoinsName.Clear();
+  
+  KeyValues kv = new KeyValues("Frank");
+  
+  if (!kv.ImportFromFile(path))
+    return;
+  
+  if(kv.GotoFirstSubKey(true))
+  {
+    do
+    {
+      char sectionName[255];
+      kv.GetSectionName(sectionName, sizeof(sectionName));
+      
+      if(kv.GotoFirstSubKey(false)) {
+        do {
+          char value[255], name[255];
+          kv.GetSectionName(value, sizeof(value));
+        
+          kv.GetString(NULL_STRING, name, sizeof(name));
+          
+          if (StrEqual(sectionName, "Ranks", false)) {
+            g_ArrayRanks.Push(StringToInt(value));
+            g_ArrayRanksName.PushString(name);
+          }
+          else if (StrEqual(sectionName, "Rank Types", false)) {
+            g_ArrayRankTypes.Push(StringToInt(value));
+            g_ArrayRankTypesName.PushString(name);
+          }
+          else if (StrEqual(sectionName, "Profile", false)) {
+            g_ArrayProfileRanks.Push(StringToInt(value));
+            g_ArrayProfileRanksName.PushString(name);
+          }
+          else if (StrEqual(sectionName, "Coins", false)) {
+            g_ArrayCoins.Push(StringToInt(value));
+            g_ArrayCoinsName.PushString(name);
+          }
+          
+        } while (kv.GotoNextKey(false));
+      }
+      kv.GoBack();
+    
+    } while(kv.GotoNextKey(true));
+  
+    kv.GoBack();
+  }
+  
+  delete kv;
+}
+
+//Set a clients mm rank
+bool SetClientMm(int client, int value)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return false;
+  
+  //Check value parameters
+  if (g_CompetitiveRankType[client] == MMSTYLE_DEFAULT || g_CompetitiveRankType[client] == MMSTYLE_WINGMANRANK) {
+    if (value < 0 || value >= g_ArrayRanks.Length)
+      return false;
+    
+    g_CompetitiveRanking[client] = value;
+  }
+  else if (g_CompetitiveRankType[client] == MMSTYLE_WINGMANLEVEL) {
+    if (value <= 0)
+      return false;
+    
+    g_CompetitiveRanking[client] = LevelToWingmanLevel(value);
+  }
+  
+  char buffer[255];
+  IntToString(g_CompetitiveRanking[client], buffer, sizeof(buffer));
+  SetClientCookie(client, g_CompetitiveRankingCookie, buffer);
+  
+  return true;
+}
+
+//Set a clients mm style
+bool SetClientMmStyle(int client, int value)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return false;
+  
+  //Check value parameters
+  if (value != MMSTYLE_DEFAULT && value != MMSTYLE_WINGMANRANK && value != MMSTYLE_WINGMANLEVEL)
+    return false;
+  
+  g_CompetitiveRankType[client] = value;
+  
+  char buffer[255];
+  IntToString(g_CompetitiveRankType[client], buffer, sizeof(buffer));
+  SetClientCookie(client, g_CompetitiveRankTypeCookie, buffer);
+  
+  return true;
+}
+
+//Set a clients profile rank
+bool SetClientProfile(int client, int value)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return false;
+    
+  //Check value parameters
+  if (value < 0 || value >= g_ArrayProfileRanks.Length)
+    return false;
+  
+  g_ProfileRank[client] = value;
+  
+  char buffer[255];
+  IntToString(g_ProfileRank[client], buffer, sizeof(buffer));
+  SetClientCookie(client, g_ProfileRankCookie, buffer);
+  
+  return true;
+}
+
+//Set a clients coin
+bool SetClientCoin(int client, int value)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return false;
+  
+  //Check value parameters
+  if (value < 0)
+    return false;
+  
+  g_ActiveCoinRank[client] = value;
+  
+  char buffer[255];
+  IntToString(g_ActiveCoinRank[client], buffer, sizeof(buffer));
+  SetClientCookie(client, g_ActiveCoinRankCookie, buffer);
+  
+  return true;
+}
+
+//Search an array value/name pair
+//Uses index search first before attempting string search (exact and then partial)
+//Returns array index of match if found or -1 if no results found
+stock int SearchArray(ArrayList &array, ArrayList &arrayName, const char[] query)
+{
+  //Index search
+  if (IsStringNumeric(query)) {
+    int queryValue = StringToInt(query);
+    
+    for (int i = 0; i < array.Length; ++i) {
+      if (array.Get(i) == queryValue)
+        return i;
+    }
+    return -1;
+  }
+  
+  //String search
+  int partialMatch = -1;
+  
+  for (int i = 0; i < arrayName.Length; ++i) {
+    //Get array name
+    char name[255];
+    arrayName.GetString(i, name, sizeof(name));
+    
+    //First find exact matches
+    if (StrEqual(name, query, false))
+      return i;
+      
+    //Then try to find partial matches
+    if (StrContains(name, query, false) != -1)
+      partialMatch = i;
+  }
+  
+  return partialMatch;
+}
+
+//Given a destired level, returns the corresponding wingman level
+//Relies on hardcoding first 24 levels, afterwhich each level is simply +15 the previous level
+stock int LevelToWingmanLevel(int level)
+{
+  static int wingmanRankValues[24] = {
+    1,
+    2,
+    4,
+    7,
+    10,
+    13,
+    16,
+    20,
+    24,
+    28,
+    32,
+    37,
+    42,
+    47,
+    52,
+    58,
+    65,
+    73,
+    82,
+    92,
+    103,
+    115,
+    128,
+    142
+  };
+
+  if (level <= 24)
+    return wingmanRankValues[level - 1];
+  
+  //Otherwise, use formula for all other levels
+  //level > 24
+  return 142 + ((level - 24) * 15);
+}
+ 
+
+stock bool IsClientVip(int client)
+{
+  if (!IsClientInGame(client) || IsFakeClient(client))
+    return false;
+  
+  char buffer[2];
+  g_Cvar_VipFlag.GetString(buffer, sizeof(buffer));
+  return ClientHasCharFlag(client, buffer[0]);
+}
+ 
+stock bool ClientHasCharFlag(int client, char charFlag)
+{
+  AdminFlag flag;
+  return (FindFlagByChar(charFlag, flag) && ClientHasAdminFlag(client, flag));
+}
+
+stock bool ClientHasAdminFlag(int client, AdminFlag flag)
+{
+  AdminId admin = GetUserAdmin(client);
+  if (admin != INVALID_ADMIN_ID && GetAdminFlag(admin, flag, Access_Effective))
+    return true;
+  return false;
+}
+
+//Helper function that tells you if a string is numeric (int or floating point)
+stock bool IsStringNumeric(const char[] s) {
+  bool decimalFound = false;
+  
+  for (int i = 0; i < strlen(s); ++i) {
+    if (!IsCharNumeric(s[i]))
+      if (s[i] == '.') {
+        //Cant have two decimal points
+        if (decimalFound)
+          return false;
+        
+        //First and last digits can't be the decimal point
+        if (i == 0 || i == strlen(s) - 1)
+          return false;
+        
+        decimalFound = true;
+      }
+      else if (s[i] == '-') {
+        //Negative sign only allowed in first position and if more numbers follow
+        if (i != 0 || strlen(s) <= 1)
+          return false;
+      }
+      else
+        return false;
+  }
+  
+  return true;
 }

@@ -1,27 +1,48 @@
 "Phrases"
 {
-	"Rank_Menu"
-	{
-		"en"		"Choose your rank:"
-	}
-	"Rank_Set"
-	{
-		"en"		"[SM] Your rank is now "
-	}
-	"ProfileRank_Menu"
-	{
-		"en"		"Choose your profile rank:"
-	}
-	"ProfileRank_Set"
-	{
-		"en"		"[SM] Your profile rank is now "
-	}
-	"Coin_Menu"
-	{
-		"en"		"Choose your coin:"
-	}
-	"Coin_Set"
-	{
-		"en"		"[SM] Your coin is now "
-	}
+  "Generic Selected"
+  {
+    "#format"	"{1:s},{2:s}"
+    "en"    "You have selected the {purple}{1}{default}: {lime}{2}"
+  }
+  "Generic Selected Admin"
+  {
+    "#format"	"{1:s},{2:s},{3:N}"
+    "en"    "You have set {olive}{3}'s{default} {purple}{1}{default} to: {lime}{2}"
+  }
+  "Generic Enter Chat"
+  {
+    "#format"	"{1:s}"
+    "en" "Please enter the {olive}{1}{default} into chat and press {olive}ENTER{default}..."
+  }
+  "Non Numeric Input"
+  {
+    "#format"	"{1:s}"
+    "en"    "Your input '{lime}{1}{default}' is not numeric."
+  }
+  "Client Not VIP"
+  {
+    "en" "You must be a VIP user to use this command. Type {orchid}!vip{default} to learn more."
+  }
+  "Search Found No Results"
+  {
+    "#format"	"{1:s}"
+    "en" "Your search query '{lime}{1}{default}' returned no results."
+  }
+  "Menu Title MM"
+  {
+    "en" "Set MM Rank:"
+  }
+  "Menu Title MM Style"
+  {
+    "en" "Set MM Rank Style:"
+  }
+  "Menu Title Profile Rank"
+  {
+    "en" "Set Profile Rank:"
+  }
+  "Menu Title Coin"
+  {
+    "en" "Set Coin:"
+  }
 }
