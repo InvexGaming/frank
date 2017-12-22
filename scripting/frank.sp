@@ -8,26 +8,34 @@
 #pragma semicolon 1
 #pragma newdecls required
 
-// Plugin Informaiton
-#define VERSION "2.00"
+/*********************************
+ *  Plugin Information
+ *********************************/
+#define PLUGIN_VERSION "2.01"
 
 public Plugin myinfo =
 {
   name = "Frank - Fake Competitive Ranks/Profiles/Coins",
   author = "Invex | Byte",
   description = "Show competitive ranks, profile icons and coins on scoreboard",
-  version = VERSION,
+  version = PLUGIN_VERSION,
   url = "http://www.invexgaming.com.au"
 };
 
-//Convars
-ConVar g_Cvar_VipFlag = null;
-
-//Definitions
+/*********************************
+ *  Definitions
+ *********************************/
 #define CHAT_TAG_PREFIX "[{lightred}FRANK{default}] "
 #define MMSTYLE_DEFAULT 0
 #define MMSTYLE_WINGMANRANK 7
 #define MMSTYLE_WINGMANLEVEL 8
+
+/*********************************
+ *  Globals
+ *********************************/
+
+//Convars
+ConVar g_Cvar_VipFlag = null;
 
 //Globals
 int g_CompetitiveRanking[MAXPLAYERS+1] = {0, ...}; //m_iCompetitiveRanking
@@ -59,8 +67,15 @@ ArrayList g_ArrayRankTypesName = null;
 ArrayList g_ArrayProfileRanksName = null;
 ArrayList g_ArrayCoinsName = null;
 
+//Forwards
+bool g_IsPostAdminCheck[MAXPLAYERS+1] = {false, ...}; //for OnClientPostAdminCheckAndCookiesCached
+
 //Lateload
 bool g_LateLoaded = false;
+
+/*********************************
+ *  Forwards
+ *********************************/
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
@@ -81,8 +96,7 @@ public void OnPluginStart()
   g_ActiveCoinRankCookie = RegClientCookie("Frank_ActiveCoinRank", "", CookieAccess_Private);
   
   //ConVars
-  CreateConVar("sm_frank_version", VERSION, "Frank version", FCVAR_SPONLY|FCVAR_REPLICATED|FCVAR_NOTIFY|FCVAR_DONTRECORD);
-  g_Cvar_VipFlag = CreateConVar("sm_frank_vipflag", "q", "Flag to identify VIP players");
+  g_Cvar_VipFlag = CreateConVar("sm_frank_vipflag", "", "Flag to identify VIP players");
   
   AutoExecConfig(true, "frank");
   
@@ -103,9 +117,9 @@ public void OnPluginStart()
       if (IsClientInGame(i)) {
         OnClientPutInServer(i);
         
-        if (!IsFakeClient(i) && AreClientCookiesCached(i))
-          OnClientCookiesCached(i);
-      }  
+        if (!IsFakeClient(i) && g_IsPostAdminCheck[i] && AreClientCookiesCached(i))
+          OnClientPostAdminCheckAndCookiesCached(i);
+      }
     }
     
     g_LateLoaded = false;
@@ -169,30 +183,44 @@ public Action OnClientSayCommand(int client, const char[] command, const char[] 
 
 public void OnClientPutInServer(int client)
 {
-  //Initilize variables if cookies uncached at this stage
-  if (!AreClientCookiesCached(client)) {
-    g_CompetitiveRanking[client] = 0;
-    g_CompetitiveRankType[client] = 0;
-    g_ProfileRank[client] = 0;
-    g_ActiveCoinRank[client] = 0;
-    g_WaitingForSayInput[client] = false;
-  }
+  //Initilize variables
+  g_CompetitiveRanking[client] = 0;
+  g_CompetitiveRankType[client] = 0;
+  g_ProfileRank[client] = 0;
+  g_ActiveCoinRank[client] = 0;
+  g_WaitingForSayInput[client] = false;
+}
+
+public void OnClientConnected(int client)
+{
+  g_IsPostAdminCheck[client] = false;
 }
 
 public void OnClientCookiesCached(int client)
 {
+  if (g_IsPostAdminCheck[client])
+    OnClientPostAdminCheckAndCookiesCached(client);
+}
+
+public void OnClientPostAdminCheck(int client)
+{
+  g_IsPostAdminCheck[client] = true;
+
+  if (AreClientCookiesCached(client))
+    OnClientPostAdminCheckAndCookiesCached(client);
+}
+
+//Run when PostAdminCheck reached and cookies are cached
+//Always run for every client and always after both OnClientCookiesCached and OnClientPostAdminCheck
+void OnClientPostAdminCheckAndCookiesCached(int client)
+{
+  if (IsFakeClient(client))
+    return;
+  
   //For non-VIP's do not load in the stored cookie preferences
   //If the client gets VIP status at a later time, their preferences will still be there
-  if (!IsClientVip(client)) {
-    //Reset global variables
-    g_CompetitiveRanking[client] = 0;
-    g_CompetitiveRankType[client] = 0;
-    g_ProfileRank[client] = 0;
-    g_ActiveCoinRank[client] = 0;
-    g_WaitingForSayInput[client] = false;
-    
+  if (!IsClientVip(client))
     return;
-  }
   
   //Load in cookie values for VIP players
   char buffer[16];
@@ -209,13 +237,6 @@ public void OnClientCookiesCached(int client)
   g_ActiveCoinRank[client] = StringToInt(buffer);
 }
 
-//Call OnClientCookiesCached here when player is fully in game and authorized
-public void OnClientPostAdminCheck(int client)
-{
-  if (IsClientInGame(client) && !IsFakeClient(client) && AreClientCookiesCached(client))
-    OnClientCookiesCached(client);
-}
-
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon)
 {
   if (buttons & IN_SCORE && !(GetEntProp(client, Prop_Data, "m_nOldButtons") & IN_SCORE)) {
@@ -228,6 +249,9 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
   return Plugin_Continue;
 }
 
+/*********************************
+ *  Events
+ *********************************/
 public Action Event_AnnouncePhaseEnd(Event event, const char[] name, bool dontBroadcast)
 {
   Handle hBuffer = StartMessageAll("ServerRankRevealAll");
@@ -239,6 +263,9 @@ public Action Event_AnnouncePhaseEnd(Event event, const char[] name, bool dontBr
   return Plugin_Continue;
 }
 
+/*********************************
+ *  Hooks
+ *********************************/
 public void Hook_OnThinkPost(int entity)
 {
   //Set entity values
@@ -248,9 +275,9 @@ public void Hook_OnThinkPost(int entity)
   SetEntDataArray(entity, g_ActiveCoinRankOffset, g_ActiveCoinRank, MAXPLAYERS+1, 4, true);
 }
 
-/*
- * Commands
- */
+/*********************************
+ *  Commands
+ *********************************/
 
 public Action Command_Mm(int client, int args)
 {
@@ -680,9 +707,9 @@ public Action Command_SetCoin(int client, int args)
   return Plugin_Handled;
 }
 
-/*
- * Menu Handlers
- */
+/*********************************
+ *  Menus And Handlers
+ *********************************/
  
 public int MmMenuHandler(Menu menu, MenuAction action, int client, int itemNum)
 {
@@ -800,9 +827,9 @@ public int CoinMenuHandler(Menu menu, MenuAction action, int client, int itemNum
   return 0;
 }
 
-/*
- * Helper functions
- */
+/*********************************
+ *  Helper Functions / Other
+ *********************************/
 
 void ReadConfigFile()
 {
@@ -956,6 +983,10 @@ bool SetClientCoin(int client, int value)
   return true;
 }
 
+/*********************************
+ *  Stocks
+ *********************************/
+
 //Search an array value/name pair
 //Uses index search first before attempting string search (exact and then partial)
 //Returns array index of match if found or -1 if no results found
@@ -1030,18 +1061,22 @@ stock int LevelToWingmanLevel(int level)
   //level > 24
   return 142 + ((level - 24) * 15);
 }
- 
 
 stock bool IsClientVip(int client)
 {
-  if (!IsClientInGame(client) || IsFakeClient(client))
+  if (!IsClientConnected(client) || IsFakeClient(client))
     return false;
   
   char buffer[2];
   g_Cvar_VipFlag.GetString(buffer, sizeof(buffer));
+
+  //Empty flag means open access
+  if(strlen(buffer) == 0)
+    return true;
+
   return ClientHasCharFlag(client, buffer[0]);
 }
- 
+
 stock bool ClientHasCharFlag(int client, char charFlag)
 {
   AdminFlag flag;
@@ -1050,6 +1085,9 @@ stock bool ClientHasCharFlag(int client, char charFlag)
 
 stock bool ClientHasAdminFlag(int client, AdminFlag flag)
 {
+  if (!IsClientConnected(client))
+    return false;
+  
   AdminId admin = GetUserAdmin(client);
   if (admin != INVALID_ADMIN_ID && GetAdminFlag(admin, flag, Access_Effective))
     return true;
