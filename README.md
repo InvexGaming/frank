@@ -16,6 +16,9 @@
 ## Description
 Fake ranks plugin for CSGO.
 
+## Showcase
+![Frank Showcase](https://invex.gg/vip/media/frank.png)
+
 ## Contributions
 Contributions are always welcome!
 Just make a [pull request](../../pulls).
